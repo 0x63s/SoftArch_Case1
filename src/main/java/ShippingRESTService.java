@@ -1,6 +1,3 @@
-import java.util.HashMap;
-import java.util.Map;
-
 import org.camunda.bpm.client.ExternalTaskClient;
 
 import javax.ws.rs.WebApplicationException;
@@ -10,23 +7,27 @@ import javax.ws.rs.client.Entity;
 import javax.ws.rs.client.WebTarget;
 import javax.ws.rs.core.MediaType;
 
+import java.util.HashMap;
+import java.util.Map;
+
 public class ShippingRESTService {
-	final static String SERVICE_URL = "http://192.168.111.5:8080/v1/consignment/request";
+	final static String SHIPPING_SERVICE_URL = "http://192.168.111.5:8080/v1/consignment/request";
+	static final String EXTERNAL_TASK_TOPIC = "group10_contact_freight_forwarder";
+	static final String EXTERNAL_TASK_BASIS_URL = "http://group10:Pliuzbi7vt8Ioud@192.168.111.3:8080/engine-rest"; //internal dev server, credentials are therefore visible
 
 	public static void main(String[] args) {
-		// Verbindung zur Workflow Engine aufbauen
-		ExternalTaskClient client = ExternalTaskClient.create()
-				.baseUrl("http://group10:Pliuzbi7vt8Ioud@192.168.111.3:8080/engine-rest").asyncResponseTimeout(1000).build();
-		
-		// für das Topic "group123_sendGreeting" registrieren und die folgende Funktion bei jedem Aufruf ausführen
-		client.subscribe("group10_contact_freight_forwarder").lockDuration(1000).handler((externalTask, externalTaskService) -> {
 
-			// Variable "name" aus der Prozessinstanz auslesen
+		//Create a new external task client
+		ExternalTaskClient client = ExternalTaskClient.create()
+				.baseUrl(EXTERNAL_TASK_BASIS_URL).asyncResponseTimeout(1000).build();
+
+		client.subscribe(EXTERNAL_TASK_TOPIC).lockDuration(1000).handler((externalTask, externalTaskService) -> {
+
+			//Grab the variables from the process engine
 			String delivery_address = (String) externalTask.getVariable("delivery_address");
 			String customer_id = (String) externalTask.getVariable("customer_id");
 			String contact_phone = (String) externalTask.getVariable("contact_phone");
 			Long weight_temp = (Long) externalTask.getVariable("weight");
-			//convert Long to int
 			int weight = weight_temp.intValue();
 
 			//Print the variables
@@ -37,10 +38,9 @@ public class ShippingRESTService {
 			System.out.println("weight: " + weight);
 			System.out.println("Sending the data to the freight forwarder...");
 
-			// Create a REST Service Client and a Target where the client should send
-			// requests to
+			//Create a REST client and send the data to the freight forwarder
 			Client clientREST = ClientBuilder.newClient();
-			WebTarget target = clientREST.target(SERVICE_URL);
+			WebTarget target = clientREST.target(SHIPPING_SERVICE_URL);
 
 			// create the message object that we will send to the service
 			NewConsignment nc = new NewConsignment();
@@ -49,24 +49,29 @@ public class ShippingRESTService {
 			nc.setCustomerReference(customer_id);
 			nc.setWeight(weight);
 
+			//Set up the response objects
 			Consignment response = null;
 			Map<String, Object> results = new HashMap<String, Object>();
 
 			try {
+				//Send the data to the freight forwarder
 				response = target.request(MediaType.APPLICATION_JSON)
 						.post(Entity.entity(nc, MediaType.APPLICATION_JSON), Consignment.class);
 
+				//Print the response
 				System.out.println("\nConsignment successfully ordered!");
 				System.out.println("Shipping Order ID: " + response.getOrderId());
 				System.out.println("Pickup Date      : " + response.getPickupdate());
 				System.out.println("Delivery Date    : " + response.getDeliverydate());
 
+				//Send back the response to the process engine
 				results.put("shipment_id", response.getOrderId());
 				results.put("pick_up_date", response.getPickupdate());
 				results.put("delivery_date", response.getDeliverydate());
 				results.put("success", true);
 
 			} catch (WebApplicationException e) {
+				//In case of an error...
 				System.out.println("Error while ordering consignment:");
 				if (e.getResponse().getStatus() == 501) {
 					System.out.println("Request was not possible, please use hotline to order");
@@ -74,11 +79,12 @@ public class ShippingRESTService {
 					System.err.println(e.getMessage());
 				}
 
+				//Send back success = false
 				results.put("success", false);
 			}
 
+			//Close the REST client and complete the external task
 			clientREST.close();
-
 			externalTaskService.complete(externalTask, results);
 		}).open();
 
